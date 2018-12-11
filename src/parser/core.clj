@@ -30,19 +30,19 @@ Where:
                 :instanceOf class-name})))
 
 (defn make-exemplar
-  "returns <exemplar> for `category` `term` and `annotations`
+  "returns <exemplar> for `category` `term` and `args`
   Where 
-  <exemplar> := {<category> <annotations>}
+  <exemplar> := {<id> <category> <args>}
   <category> is one of #{:S :N :D}, or a combination of same.
   <term> is a token of NL, assocated with <lex>
-  <annotations> := {<arg> <binding>}, (default {?id})
+  <args> := {<arg> <binding>}, (default {?id})
   <arg> is either a keyword corresponding to an associated binding for
     <definition>, or one of #{:id}
   <binding> provides an exemplary binding to <arg>
   <lex> is a lexical entry for the form associated with <term>
   keys(lex) := #{:definition :exemplars ...}
   <definition> is a function associated with <lex>, whose arguments reference
-    the <arg>s in <annotations>
+    the <arg>s in <args>
   <id> identifies the exemplar.
   <exemplars> := [<exemplar> ...]
   Note: each <lex> must have at least one exemplar, but will typically have
@@ -60,10 +60,11 @@ Where:
   ([category term]
    (make-exemplar category term {}))
   
-  ([category term annotations]
-   {category (merge annotations
-                    {:id (keyword (gensym term))
-                     })}))
+  ([category term args]
+   {:id (keyword (gensym term))
+    :category category
+    :args args
+    }))
 
 
 
@@ -79,8 +80,10 @@ Where:
                                     :S
                                     "hello"
                                     {
-                                     :D (make-prototype :Discourse)
-                                     :N (make-prototype :Person)
+                                     :D (merge {:category :D}
+                                               (make-prototype :Discourse))
+                                     :N (merge {:category :N}
+                                               (make-prototype :Person))
                                      })
                                    ]}]
              "world" [{:definition {:category :N
@@ -115,24 +118,39 @@ Where:
     
 (defn matcher-for 
   "
-  Returns (fn [source target] -> {?source ?target ?degree-of-match} for `lexical-entry`
+  Returns (fn [source target] -> {?source ?target ?degree-of-match} for `lexical-entry` and `arg`
   Where
   <lexical-entry> := {:definition <source-definition> :exemplars <exemplars>}
+  <source-defintion> := {?seek-left ?seek-right ?semantics...}
+  <arg> is one of #{<seek-left> <seek-right>}
+  <seek-left> and <seek-right> name arguments to ?semantics
+  <semantics> is a sequence readable as a (fn [args] ...) -> <parse-graph>
   <target> {:definition <target-definition> :exemplars <target-exemplars>
      :current <current>}, a sup-parse of the current parse
-  <source> is an exemplar from <lexical-entry>
+  <source> := {?category ...} is an argument for <arg> in an exemplar from
+    <lexical-entry>
   <degree of match> is a number 0...1, reflecting how well <target> matches 
     <source>.
 "
-  [lexical-entry]
+
+  [lexical-entry arg]
   {:pre [(map? lexical-entry)
-         (:definition lexical-entry)]
+         (:definition lexical-entry)
+         (not (nil? arg))
+         ]
    
    }
   (fn [source target]
-    #dbg(let [match-categories
+    {:pre [(get-in source [:category])
+           (get-in target [:definition :category])
+           ]
+     }
+    (def _source source)
+    (def _target target)
+    (let [
+          match-categories
           (fn [score]
-            (if (= (get-in lexical-entry [:definition :category])
+            (if (= (get-in source [:category])
                    (get-in target [:definition :category]))
               (+ score 0.5)
               score))
@@ -141,13 +159,17 @@ Where:
     (-> 0
         match-categories))))
           
+(def hello (first (lookup-entry test-context "hello")))
+(def hello-exemplar (first (:exemplars (first (lookup-entry test-context "hello")))))
+(def world (first (lookup-entry test-context "world")))
 
 (defn test-matcher-for []
-  (let [hello (first (lookup-entry test-context "hello"))
-        ]
-    (apply (matcher-for hello)
-           [(first (:exemplars hello))
-            (first (lookup-entry test-context "world"))])))
+  #dbg
+  (apply (matcher-for hello (get-in hello [:definition :seek-right]))
+         [(get-in hello-exemplar [:args :N])
+          world]))
+
+  
                       
 (defn parse
   "returns <parsed string>, informed by <context>
