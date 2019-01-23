@@ -1,5 +1,7 @@
 (ns parser.core
-  (:require [clojure.string :as string]
+  (:require [clojure.string :refer :all]
+            [igraph.core :refer :all]
+            [igraph.graph :refer :all]
             [opennlp.nlp]
             )
   
@@ -11,6 +13,10 @@
 ;; English tokenizer...
 (defonce tokenize (opennlp.nlp/make-tokenizer
                    "http://opennlp.sourceforge.net/models-1.5/en-token.bin"))
+
+(defonce split-sentences  (opennlp.nlp/make-sentence-detector
+                           "http://opennlp.sourceforge.net/models-1.5/en-sent.bin"))
+
 
 (defn make-prototype [class-name]
 
@@ -91,21 +97,19 @@ Where:
                                                   {:N {:sameAs :TheWorld}})}
                        :exemplars [(make-exemplar :N "world")]}]}})
 
-
-
-
+     
 (defn all-lower-case? [token]
   "True iff <token> is all lower-case"
-  (= token (string/lower-case token)))
+  (= token (lower-case token)))
 
 (defn all-upper-case? [token]
   "True iff <token> is all upper-case"
-  (= token (string/upper-case token)))
+  (= token (upper-case token)))
 
 (defn capitalized? [token]
   "True iff <token> is all lower-case"
-  (= token (str (string/upper-case (subs token 0 1))
-                (string/lower-case (subs token 1)))))
+  (= token (str (upper-case (subs token 0 1))
+                (lower-case (subs token 1)))))
 
 (defn lookup-entry
   {:test (fn [] (not (nil? (lookup-entry test-context "hello"))))
@@ -113,7 +117,7 @@ Where:
   [context token]
   
   ;; TODO: deal with capitalization issues
-  (get-in context [:lexicon (string/lower-case token)]))
+  (get-in context [:lexicon (lower-case token)]))
 
     
 (defn matcher-for 
@@ -164,7 +168,6 @@ Where:
 (def world (first (lookup-entry test-context "world")))
 
 (defn test-matcher-for []
-  #dbg
   (apply (matcher-for hello (get-in hello [:definition :seek-right]))
          [(get-in hello-exemplar [:args :N])
           world]))
@@ -188,11 +191,115 @@ Where:
         ]
     entries))
 
+(def english-speaker (add (make-graph)
+                          [[:self :id :english-speaker]
+                           [:english-speaker :isa :Speaker-Model]
+                           ]))
+
+
+(def the unique)
+
+(defn id [g]
+  (the (g :self :id)))
+
+(defn sentence-id [discourse start end]
+  (keyword (name (id discourse))
+           (str (join "," [start end]))))
+
+(defn new-sentence [discourse contents]
+  (add (make-graph)
+       [[:self
+         :rdfs:type :nif:Sentence
+         :nif:referenceContext (the (discourse :self :id))
+         :nif:anchorOf contents
+         ]
+        ]))
   
+        
+
+(defn annotate-sentence-positions [discourse acc next-sentence]
+  "Returns <acc> for <next-sentence>, in context of <discourse>
+Where
+keys(<acc>) := #{:last-offset :sentences}
+<next-sentence> := <sentence-string>
+<last-offset> is the last offset of the last member of <sentences>
+<sentences> := [<sentence>...]
+<sentence> := [[:self :nif:beginIndex ... :nif:endIndex ... :nif:nextSentence
+
+"
+  {:post
+   (fn [acc']
+     (let [s (last (:sentences acc'))]
+       (ask s :self :nif:anchorOf 
+            (subs (the (discourse :self :nif:isString))
+                  (the (s :self :nif:beginIndex))
+                  (the (s :self :nif:endIndex))))))
+   }
+  #dbg     
+  (let [previous-sentence (last (:sentences acc))
+        add-next-link (fn [sentences]
+                        (if previous-sentence
+                          (conj (vec (butlast sentences))
+                                (add previous-sentence
+                                     [[:self
+                                       :nif:nextSentence
+                                       (id next-sentence)]])))
+                        sentences)
+        sentence-contents (the (next-sentence :self :nif:anchorOf))
+        ;; todo: try index-of instead...
+        gap (let [[_ spaces]
+                  (re-find #"^(\s*)"
+                           (subs (the
+                                  (discourse :self
+                                             :nif:isString))
+                                 (or (:last-offset acc) 0)))
+                  ]
+              (count spaces))
+        
+        beg (+ (or (:last-offset acc) 0) gap)
+        end (+ beg (count sentence-contents))
+
+        
+         ]
+        {:last-offset end
+         :sentences (conj (add-next-link (or (:sentences acc) []))
+                          (add next-sentence
+                               [[:self
+                                 :id (sentence-id discourse beg end)
+                                 :nif:beginIndex beg
+                                 :nif:endIndex end
+                                 ]
+                                ]))
+         }
+       
+        ))
+
+(defn discourse-id [corpus index]
+  (keyword corpus (str "D" index)))
+
+(defn new-discourse [corpus index contents]
+  (let [discourse 
+        (add (make-graph)
+              [[:self
+                :id (discourse-id "mycorpus" index)
+                :nif:isString contents
+                :nif:beginIndex 0
+                :nif:endIndex (count contents)
+                ]])]
+    (add discourse
+         [[:self
+           ::sentences (reduce (partial annotate-sentence-positions discourse)
+                               []
+                               (map (partial new-sentence discourse)
+                                    (split-sentences contents)))
+         
+           ]])))
+
+                                 
 (defn -main
   "I don't do a whole lot ... yet."
   [& args]
-  (println (parse "Hello World" {})))
-
+  #_(println (parse "Hello World" {}))
+  (new-discourse "mycorpus" 1 "hello world"))
 
    
