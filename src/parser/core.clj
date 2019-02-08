@@ -202,104 +202,110 @@ Where:
 (defn id [g]
   (the (g :self :id)))
 
+(defn rename-graph [g]
+  (let [current-name (or (id g) :self)]
+    (query g [[current-name :?p :?o]])))
+         
+
 (defn sentence-id [discourse start end]
   (keyword (name (id discourse))
            (str (join "," [start end]))))
 
-(defn new-sentence [discourse contents]
-  (add (make-graph)
-       [[:self
-         :rdfs:type :nif:Sentence
-         :nif:referenceContext (the (discourse :self :id))
-         :nif:anchorOf contents
-         ]
-        ]))
+(defn new-sentence-properties [discourse contents]
+  "Returns <sentence-properties>
+Where
+keys(sentence-properties) := #{:rdfs:type :nif:referenceContext nif:anchorOf}
+"
+  {
+   :rdfs:type :nif:Sentence
+   :nif:referenceContext (the (discourse :self :id))
+   :nif:anchorOf contents
+   })
   
+(defn normalize [m]
+  "Returns each value in <m> as a set to support graph normal form.
+"
+  (reduce-kv (fn [acc k v]
+               (assoc acc k (set [v]))) {} m))
         
-
-(defn annotate-sentence-positions [discourse acc next-sentence]
-  "Returns <acc> for <next-sentence>, in context of <discourse>
+(defn annotate-sentence-positions [acc next-sentence]
+  "Returns [<discourse> <last-offset>] annotated  for <next-sentence>
 Where
 keys(<acc>) := #{:last-offset :sentences}
-<next-sentence> := <sentence-string>
+<next-sentence> := <sentence-properties>
 <last-offset> is the last offset of the last member of <sentences>
-<sentences> := [<sentence>...]
-<sentence> := [[:self :nif:beginIndex ... :nif:endIndex ... :nif:nextSentence
-
+<sentences> := [<sentence id>...]
+keys(<sentence properties> := #{nif:beginIndex, 
+                                :nif:endIndex, 
+                                :nif:nextSentence, ...}
+<discourse> := {:self {:id #{<id>}}
+                <id> :rdf:type :natlex:Discourse
+                <id> :nif:isString <string>
+               }
 "
   {:post
    (fn [acc']
-     (let [s (last (:sentences acc'))]
-       (ask s :self :nif:anchorOf 
-            (subs (the (discourse :self :nif:isString))
-                  (the (s :self :nif:beginIndex))
-                  (the (s :self :nif:endIndex))))))
+     (let [[discourse lo] acc'
+           s (last (:sentences discourse))]
+       (= (the (discourse s :nif:anchorOf))
+          (subs (the (discourse :nif:isString))
+                (the (discourse s :nif:beginIndex))
+                (the (discourse s :nif:endIndex))))))
    }
-  #dbg     
-  (let [previous-sentence (last (:sentences acc))
-        add-next-link (fn [sentences]
-                        (if previous-sentence
-                          (conj (vec (butlast sentences))
-                                (add previous-sentence
-                                     [[:self
-                                       :nif:nextSentence
-                                       (id next-sentence)]])))
-                        sentences)
-        sentence-contents (the (next-sentence :self :nif:anchorOf))
-        ;; todo: try index-of instead...
+  
+  (let [[discourse last-offset] acc
+        id (the (discourse :self :id))
+        sentences (or (the (discourse id :sentences)) [])
+        previous-sentence (last sentences)
         gap (let [[_ spaces]
                   (re-find #"^(\s*)"
                            (subs (the
-                                  (discourse :self
-                                             :nif:isString))
-                                 (or (:last-offset acc) 0)))
+                                  (discourse id :nif:isString))
+                                 last-offset))
                   ]
               (count spaces))
         
         beg (+ (or (:last-offset acc) 0) gap)
-        end (+ beg (count sentence-contents))
+        end (+ beg (count (:nif:anchorOf next-sentence)))
+        sid (sentence-id discourse beg end)
+        ]
+    ;; return new acc...
+    [(add (add (subtract discourse
+                         [id :sentences])
+               (concat 
+                [[id :sentences (conj sentences sid)]]
+                (if previous-sentence
+                  [[previous-sentence :nif:nextSentence sid]]
+                  [])))
+          {sid (normalize next-sentence)})
+     end]))
 
-        
-         ]
-        {:last-offset end
-         :sentences (conj (add-next-link (or (:sentences acc) []))
-                          (add next-sentence
-                               [[:self
-                                 :id (sentence-id discourse beg end)
-                                 :nif:beginIndex beg
-                                 :nif:endIndex end
-                                 ]
-                                ]))
-         }
-       
-        ))
 
 (defn discourse-id [corpus index]
   (keyword corpus (str "D" index)))
 
 (defn new-discourse [corpus index contents]
-  (let [discourse 
+  (let [discourse-id (discourse-id "mycorpus" index)
+        discourse 
         (add (make-graph)
               [[:self
-                :id (discourse-id "mycorpus" index)
+                :id discourse-id]
+               [discourse-id
+                :rdf:type :nif:Context
                 :nif:isString contents
                 :nif:beginIndex 0
                 :nif:endIndex (count contents)
                 ]])]
-    (add discourse
-         [[:self
-           ::sentences (reduce (partial annotate-sentence-positions discourse)
-                               []
-                               (map (partial new-sentence discourse)
-                                    (split-sentences contents)))
-         
-           ]])))
+    (first (reduce annotate-sentence-positions
+                   [discourse 0]
+                   (map (partial new-sentence-properties discourse)
+                        (split-sentences contents))))))
 
                                  
 (defn -main
   "I don't do a whole lot ... yet."
   [& args]
   #_(println (parse "Hello World" {}))
-  (new-discourse "mycorpus" 1 "hello world"))
+  (normal-form (new-discourse "mycorpus" 1 "hello world")))
 
    
