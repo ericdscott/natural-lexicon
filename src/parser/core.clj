@@ -3,6 +3,7 @@
             [igraph.core :refer :all]
             [igraph.graph :refer :all]
             [opennlp.nlp]
+            [taoensso.timbre :as log]
             )
   
   (:gen-class))
@@ -96,6 +97,7 @@ Where:
                                     :semantics '(fn []
                                                   {:N {:sameAs :TheWorld}})}
                        :exemplars [(make-exemplar :N "world")]}]}})
+
 
      
 (defn all-lower-case? [token]
@@ -207,40 +209,54 @@ Where:
     (query g [[current-name :?p :?o]])))
          
 
-(defn sentence-id [discourse start end]
+(defn substring-id [discourse start end]
   (keyword (name (id discourse))
            (str (join "," [start end]))))
 
-(defn new-sentence-properties [discourse contents]
-  "Returns <sentence-properties>
+(defn new-substring-properties [type discourse contents]
+  "Returns <substring-properties>
 Where
-keys(sentence-properties) := #{:rdfs:type :nif:referenceContext nif:anchorOf}
+keys(substring-properties) := #{:rdf:type :nif:referenceContext nif:anchorOf}
 "
   {
-   :rdfs:type :nif:Sentence
+   :rdf:type type
    :nif:referenceContext (the (discourse :self :id))
    :nif:anchorOf contents
    })
-  
+
+(def new-sentence-properties
+  "Returns new-substring for type :nif:Sentence"
+  (partial new-substring-properties :nif:Sentence))
+
+(def new-word-properties
+  "Returns new-substring for type :nif:Word"
+  (partial new-substring-properties :nif:Word))
+
+
 (defn normalize [m]
   "Returns each value in <m> as a set to support graph normal form.
+Typically used when we have a simple key->single-value map and want to add it ot the graph
 "
   (reduce-kv (fn [acc k v]
                (assoc acc k (set [v]))) {} m))
         
-(defn annotate-sentence-positions [acc next-sentence]
-  "Returns [<discourse> <last-offset>] annotated  for <next-sentence>
+(defn annotate-substring-positions [substrings-property
+                                    next-substring-property
+                                    parent-id
+                                    acc next-substring]
+  "Returns [<discourse> <last-offset>] annotated  for <next-substring>
 Where
 keys(<acc>) := #{:last-offset :sentences}
-<next-sentence> := <sentence-properties>
-<last-offset> is the last offset of the last member of <sentences>
-<sentences> := [<sentence id>...]
-keys(<sentence properties> := #{nif:beginIndex, 
+keys(next-substring) := #{nif:beginIndex, 
                                 :nif:endIndex, 
-                                :nif:nextSentence, ...}
-<discourse> := {:self {:id #{<id>}}
+                                :rdf:type}
+(<discourse> <parent-id> <substrings-property>)  -> #{[<substring-id>, ...]}
+<last-offset> is the last offset of the last sibling substring added.
+<substring-property> is one of #{::sentences ::tokens}
+<discourse>' := {:self {:id #{<id>}}
                 <id> :rdf:type :natlex:Discourse
                 <id> :nif:isString <string>
+                <id> <substring-property> [<substring-id>, ...]
                }
 "
   {:post
@@ -252,39 +268,51 @@ keys(<sentence properties> := #{nif:beginIndex,
                 (the (discourse s :nif:beginIndex))
                 (the (discourse s :nif:endIndex))))))
    }
-  
   (let [[discourse last-offset] acc
-        id (the (discourse :self :id))
-        sentences (or (the (discourse id :sentences)) [])
-        previous-sentence (last sentences)
-        gap (let [[_ spaces]
-                  (re-find #"^(\s*)"
-                           (subs (the
-                                  (discourse id :nif:isString))
-                                 last-offset))
-                  ]
-              (count spaces))
-        
-        beg (+ (or (:last-offset acc) 0) gap)
-        end (+ beg (count (:nif:anchorOf next-sentence)))
-        sid (sentence-id discourse beg end)
+        graph-id (the (discourse :self :id))
+        substrings (or (the (discourse parent-id substrings-property))
+                       [])
+        previous-substring (last substrings)
+        leading-space-count
+        (let [[_ spaces]
+              (re-find #"^(\s*)"
+                       (subs (the
+                              (discourse graph-id :nif:isString))
+                             last-offset))
+              ]
+          (count spaces))
+        beg (+ last-offset leading-space-count)
+        end (+ beg (count (:nif:anchorOf next-substring)))
+        sid (substring-id discourse beg end)
         ]
     ;; return new acc...
     [(add (add (subtract discourse
-                         [id :sentences])
+                         [parent-id substrings-property])
                (concat 
-                [[id :sentences (conj sentences sid)]]
-                (if previous-sentence
-                  [[previous-sentence :nif:nextSentence sid]]
+                [[parent-id substrings-property (conj substrings sid)]
+                 [sid :nif:beginIndex beg
+                      :nif:endIndex end]
+                 ]
+                (if previous-substring
+                  [[previous-substring next-substring-property sid]]
                   [])))
-          {sid (normalize next-sentence)})
+          {sid (normalize next-substring)})
      end]))
+
+(def annotate-sentence-positions
+  (partial annotate-substring-positions ::sentences :nif:nextSentence))
+
+(def annotate-token-positions
+  (partial annotate-substring-positions ::tokens :nif:nextWord))
+  
+                                          
 
 
 (defn discourse-id [corpus index]
   (keyword corpus (str "D" index)))
 
 (defn new-discourse [corpus index contents]
+  #dbg
   (let [discourse-id (discourse-id "mycorpus" index)
         discourse 
         (add (make-graph)
@@ -295,17 +323,33 @@ keys(<sentence properties> := #{nif:beginIndex,
                 :nif:isString contents
                 :nif:beginIndex 0
                 :nif:endIndex (count contents)
-                ]])]
-    (first (reduce annotate-sentence-positions
-                   [discourse 0]
-                   (map (partial new-sentence-properties discourse)
-                        (split-sentences contents))))))
+                ]])
+        sentence-annotated
+        (first (reduce (partial annotate-sentence-positions discourse-id)
+                       [discourse 0]
+                       (map (partial new-sentence-properties discourse)
+                            (split-sentences contents))))
+        annotate-tokens
+        (fn [discourse sentence-id]
+          (first (reduce (partial annotate-token-positions sentence-id)
+                         [sentence-annotated (the (sentence-annotated
+                                                   sentence-id
+                                                   :nif:beginIndex))]
+                         (map (partial new-word-properties sentence-annotated)
+                              (tokenize (the (sentence-annotated
+                                              sentence-id
+                                              :nif:anchorOf)))))))
+        ]
+    sentence-annotated
+    #_(log/info (normal-form sentence-annotated))
+    (reduce annotate-tokens sentence-annotated
+            (the (sentence-annotated discourse-id ::sentences)))))
 
                                  
 (defn -main
   "I don't do a whole lot ... yet."
   [& args]
   #_(println (parse "Hello World" {}))
-  (normal-form (new-discourse "mycorpus" 1 "hello world")))
+  (normal-form (new-discourse "mycorpus" 1 "hello world. It's great to be alive.")))
 
    
