@@ -1,5 +1,5 @@
 (ns parser.core
-  (:require [clojure.string :refer :all]
+  (:require [clojure.string :as str]
             [igraph.core :refer :all]
             [igraph.graph :refer :all]
             [opennlp.nlp]
@@ -7,6 +7,8 @@
             )
   
   (:gen-class))
+
+(def the unique)
 
 ;; see my notes in 
 ;; file:analogical-language-model.txt::*Sun%20Sep%2030%20***
@@ -75,7 +77,7 @@ Where:
 
 
 
-(def test-context
+(def old-test-context
   {:lexicon {"hello" [{:definition {:category :S
                                     :seek-right :N
                                     :seek-global :D
@@ -99,27 +101,127 @@ Where:
                        :exemplars [(make-exemplar :N "world")]}]}})
 
 
-     
+(def metagraph (atom (make-graph :schema {:id ::MetaGraph})))
+
+(defn graph-id [g]
+  "Returns <id> for  <g>
+Where 
+<g> is a graph with schema {:id <id>...}
+"
+  (:id (.schema g)))
+
+(defn add-subgraph! [subgraph]
+  "Returns `metagraph`, with `subgraph` added.
+Where
+<metagraph> := [[::Metagraph natlex:hasSubgraph  <graphName>]
+                [<graphName> natlex:asGraph <subgraph>]
+                ...], an global atom
+<subgraph> is an instance implmenting IGraph s.t. 
+  [:self :id <graphName>]
+<graphName> is a keyword naming <subgraph>
+"
+  (reset! metagraph
+          (add @metagraph
+               [[::MetaGraph :natlex:hasSubgraph (graph-id subgraph)]
+                [(graph-id subgraph) :natlex:asGraph subgraph]
+                ])))
+
+(defn add-lexicon! []
+  "Returns `metagraph` s.t. [[<metagraph> :hasSubgraph :Lexicon]
+                             [:Lexicon :natlex:asGraph <Lexicon>]
+                             ...]
+                             [[<lexicon> :self :id :Lexicon]
+                              [<form> :hasEntry <entry>]
+                              [<entry> <p> <o>]]
+"
+  (add-subgraph!
+   (add (make-graph
+         :schema {:id :Lexicon})
+    
+    [[:enForm:hello :hasEntry :enLex:hello]
+     [:enLex:hello
+      :rdf:type :LexicalEntry
+      :cat "S/N"
+      :cg:category :S
+      :cg:seekRight :N
+      :cg:seekGlobal :D
+      :cg:semantics '(fn [{:keys [D N]}]
+                       [[:S
+                         :sem:eventType :Greeting
+                         :sem:addressee N]]
+                             
+
+      ]
+     [:enForm:world :hasEntry :enLex:world]
+     [:enLex:world
+      :rdf:type :LexicalEntry
+      :cg:category :N
+      :cg:semantics '(fn[]
+                       [:N :owl:sameAs :wd:Q16502]
+                        )]
+      
+      ]
+     ])))
+
+(add-lexicon!)
+
+(defn add-exemplar
+  "
+  Returns `metagraph`, s.t. an exemplar is added for <entry> using <args>
+  Where
+  <metagraph> is the metagraph, modified s.t.
+    [[<entry> :natlex:hasExemplar <exemplar>]]
+    [:Metagraph :natlex:hasSubgraph <exemplar>]
+    [<exemplar> <s> <p> <o>...]
+  <entry> names an existing lexical entry
+  <args> := {<key> <value>...}, matching the semantics of <entry>
+  "
+  [entry args]
+  #dbg
+  (let [lexicon (the (@metagraph :Lexicon :natlex:asGraph))
+        cat (the (lexicon entry :cg:category))
+        exemplar (add
+                  (:D args)
+                  (interpret
+                   (add 
+                    (make-graph
+                     :schema {:mappings
+                              {cat
+                               (-> cat
+                                   str
+                                   gensym)}})
+                    (apply (eval (the (lexicon entry :cg:semantics)))
+                           [args]))))
+                     
+        ]
+    (add lexicon [entry :natlex:hasExemplar (graph-id exemplar)])))
+                     
+
 (defn all-lower-case? [token]
   "True iff <token> is all lower-case"
-  (= token (lower-case token)))
+  (= token (str/lower-case token)))
 
 (defn all-upper-case? [token]
   "True iff <token> is all upper-case"
-  (= token (upper-case token)))
+  (= token (str/upper-case token)))
 
 (defn capitalized? [token]
   "True iff <token> is all lower-case"
-  (= token (str (upper-case (subs token 0 1))
-                (lower-case (subs token 1)))))
+  (= token (str (str/upper-case (subs token 0 1))
+                (str/lower-case (subs token 1)))))
 
 (defn lookup-entry
-  {:test (fn [] (not (nil? (lookup-entry test-context "hello"))))
+  "Returns #{<entry>...} for <form>
+  Where
+  <entry> is a keyword identifying a lexical entry
+  <form> is a keyword identifying a lexical form
+  "
+  {:test (fn [] (not (nil? (lookup-entry :enForm:hello))))
    }
-  [context token]
-  
-  ;; TODO: deal with capitalization issues
-  (get-in context [:lexicon (lower-case token)]))
+  [form]
+  (let [lexicon (the (@metagraph :Lexicon :natlex:asGraph))
+        ]
+    (lexicon form :hasEntry)))
 
     
 (defn matcher-for 
@@ -146,6 +248,7 @@ Where:
          ]
    
    }
+  (Exception. "This needs to be refactored for graph")
   (fn [source target]
     {:pre [(get-in source [:category])
            (get-in target [:definition :category])
@@ -165,18 +268,19 @@ Where:
     (-> 0
         match-categories))))
           
-(def hello (first (lookup-entry test-context "hello")))
-(def hello-exemplar (first (:exemplars (first (lookup-entry test-context "hello")))))
-(def world (first (lookup-entry test-context "world")))
+;;(def hello (first (lookup-entry :enForm:hello)))
 
-(defn test-matcher-for []
+;; (def hello-exemplar (first (:exemplars (first (lookup-entry test-context "hello")))))
+;; (def world (first (lookup-entry test-context "world")))
+
+#_(defn test-matcher-for []
   (apply (matcher-for hello (get-in hello [:definition :seek-right]))
          [(get-in hello-exemplar [:args :N])
           world]))
 
   
                       
-(defn parse
+#_(defn parse
   "returns <parsed string>, informed by <context>
   Where
   <instring> is a string of NL text.
@@ -193,25 +297,16 @@ Where:
         ]
     entries))
 
-(def english-speaker (add (make-graph)
-                          [[:self :id :english-speaker]
-                           [:english-speaker :isa :Speaker-Model]
-                           ]))
+(def english-speaker (add (make-graph :schema {:id :english-speaker})
+                          [[:english-speaker :isa :Speaker-Model]]))
 
 
-(def the unique)
 
-(defn id [g]
-  (the (g :self :id)))
 
-(defn rename-graph [g]
-  (let [current-name (or (id g) :self)]
-    (query g [[current-name :?p :?o]])))
-         
 
 (defn substring-id [discourse start end]
-  (keyword (name (id discourse))
-           (str (join "," [start end]))))
+  (keyword (name (graph-id discourse))
+           (str (str/join "," [start end]))))
 
 (defn new-substring-properties [type discourse contents]
   "Returns <substring-properties>
@@ -220,7 +315,7 @@ keys(substring-properties) := #{:rdf:type :nif:referenceContext nif:anchorOf}
 "
   {
    :rdf:type type
-   :nif:referenceContext (the (discourse :self :id))
+   :nif:referenceContext (graph-id discourse)
    :nif:anchorOf contents
    })
 
@@ -269,7 +364,6 @@ keys(next-substring) := #{nif:beginIndex,
                 (the (discourse s :nif:endIndex))))))
    }
   (let [[discourse last-offset] acc
-        graph-id (the (discourse :self :id))
         substrings (or (the (discourse parent-id substrings-property))
                        [])
         previous-substring (last substrings)
@@ -277,7 +371,9 @@ keys(next-substring) := #{nif:beginIndex,
         (let [[_ spaces]
               (re-find #"^(\s*)"
                        (subs (the
-                              (discourse graph-id :nif:isString))
+                              (discourse
+                               (graph-id discourse)
+                               :nif:isString))
                              last-offset))
               ]
           (count spaces))
@@ -286,18 +382,21 @@ keys(next-substring) := #{nif:beginIndex,
         sid (substring-id discourse beg end)
         ]
     ;; return new acc...
-    [(add (add (subtract discourse
-                         [parent-id substrings-property])
-               (concat 
-                [[parent-id substrings-property (conj substrings sid)]
-                 [sid :nif:beginIndex beg
-                      :nif:endIndex end]
-                 ]
-                (if previous-substring
-                  [[previous-substring next-substring-property sid]]
-                  [])))
-          {sid (normalize next-substring)})
+    [(-> discourse
+         (subtract [parent-id substrings-property])
+         (add (reduce
+               conj
+               [[parent-id substrings-property (conj substrings sid)]
+                [sid :nif:beginIndex beg
+                 :nif:endIndex end]
+                ]
+               (if previous-substring
+                 [[previous-substring next-substring-property sid]]
+                 [])))
+         (add {sid (normalize next-substring)}))
+     ,
      end]))
+
 
 (def annotate-sentence-positions
   (partial annotate-substring-positions ::sentences :nif:nextSentence))
@@ -312,18 +411,16 @@ keys(next-substring) := #{nif:beginIndex,
   (keyword corpus (str "D" index)))
 
 (defn new-discourse [corpus index contents]
-  #dbg
   (let [discourse-id (discourse-id "mycorpus" index)
         discourse 
-        (add (make-graph)
-              [[:self
-                :id discourse-id]
-               [discourse-id
-                :rdf:type :nif:Context
-                :nif:isString contents
-                :nif:beginIndex 0
-                :nif:endIndex (count contents)
-                ]])
+        (add (make-graph :schema {:id discourse-id})
+             [[discourse-id
+              :rdf:type :nif:Context
+              :nif:isString contents
+              :nif:beginIndex 0
+              :nif:endIndex (count contents)
+              ]])
+        
         sentence-annotated
         (first (reduce (partial annotate-sentence-positions discourse-id)
                        [discourse 0]
@@ -345,11 +442,24 @@ keys(next-substring) := #{nif:beginIndex,
     (reduce annotate-tokens sentence-annotated
             (the (sentence-annotated discourse-id ::sentences)))))
 
-                                 
+
 (defn -main
   "I don't do a whole lot ... yet."
   [& args]
   #_(println (parse "Hello World" {}))
-  (normal-form (new-discourse "mycorpus" 1 "hello world. It's great to be alive.")))
+  (let [discourse (new-discourse
+                   "mycorpus" 1 "hello world. It's great to be alive.")
+        lexicon (the (@metagraph :Lexicon :asGraph))
+        ]
+    
+    ;; (make-graph :schema {:id (keyword (str (name entry) "#blah"))})
+    (let [some-person (keyword (gensym "Person"))
+          D (make-graph :schema {:id :enLex:hello#examplar1})
+          ]
+      (add-exemplar :enLex:hello
+                    {:D (add D [some-person :rdf:type :wd:Q5])
+                     :N some-person
+                     }))))
+  
 
    
