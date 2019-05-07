@@ -1,4 +1,9 @@
 (ns parser.core
+  {
+   :vann/preferredNamespacePrefix "cg"
+   :vann/preferredNamespaceUri "http://rdf.naturallexicon.org/cg/parser"
+   :rdfs/comment "Deals with using the Natlex categorial grammar to parse NL text"
+   }
   (:require [clojure.string :as str]
             [igraph.core :refer :all]
             [igraph.graph :refer :all]
@@ -7,6 +12,131 @@
             )
   
   (:gen-class))
+
+;; Holds the terms of our ontology
+(def terms-ref (atom (make-graph)))
+
+(defn add-terms [terms]
+  (reset! terms-ref
+          (add @terms-ref terms)))
+
+;; GENERAL
+(add-terms
+ [[:natlex/hasChunk
+   :rdfs/domain :natlex/CognitiveModel
+   :rdfs/range :natlex/Chunk
+   :rdfs/comment "Asserts that <chunk> is a URI associated with its own graph."
+   ]
+  [:natlex/asGraph
+   :rdfs/comment "Asserts that <chunk id> refers to the graph <chunk>"
+   :rdfs/domain :natlex/Chunk
+   :rdfs/range :natlex/ChunkGraph
+   ]
+  [:natlex/Chunk
+   :rdf/type :rdfs/Class
+   :rdfs/comment "Refers to a graph dedicated to representing a chunk whose elements are activated together. A Chunk will appear in the metagraph and as the :Id of its associated graph."
+   ]
+  ])
+
+;; DISCOURSE
+(add-terms
+   [[:cg/Discourse
+     :rdf/type :rdf/Class
+     :rdfs/comment "Refers to a unit of discourse"
+     ]
+    [:cg/addressee
+     :rdf/type :rdf/Property
+     :rdfs/domain :cg/Discourse
+     :rdfs/range :cg/Audience
+     :rdfs/comment "<discourse> cd/addressee <audience>
+Asserts that the content of <discourse> is being directed to <audience> 
+Where
+<discourse> is a unit of discourse
+<audience> is one or more listeners
+"
+     ]
+    [:cg/Audience
+     :rdf/type :rdf/Class
+     :rdfs/comment "Refers to one or more people presumed to share the same model of listening fluency in the language of some discourse."
+     ]
+    
+    ])
+
+;; OBJECTS IN THE WORLD
+(add-terms
+ [[:cg/Person
+   :rdfs/sameAs :wd/Q5
+   ]
+  ])
+
+;; META
+(add-terms
+ [[:cg/rangeVector
+   :rdfs/comment "<x> rangeVector <v> 
+Asserts that <v> is a vector, and would need special processing to render as RDF."
+   ]
+  [:cg/Vector
+   :rdfs/comment "Refers to a construct rendered as a vector"
+   ]
+  ])
+
+;; GRAMMAR STUFF
+(add-terms
+ [[:natlex/LexicalEntry
+   :rdfs/subClassOf :natlex/Chunk
+   :rdfs/comment "Refers to a Lexical entry chunk for one or more related forms."
+   ]
+  [:cg/cat
+   :rdfs/domain :natlex/LexicalEntry
+   :rdfs/range :rdf/Literal
+   :rdfs/comment "Asserts the CG category for <entry> as a string."
+   ]
+  [:cg/category
+   :rdfs/subPropertyOf :cg/lexicalProperty
+   :rdfs/domain :cg/LexicalEntry
+   :cg/rangeVector :cg/Category
+   :rdfs/comment "<entry> category <category>
+Asserts that <entry> when construed in text makes reference to elements of 
+<category>, in order of salience.
+Where
+<entry> is a lexical entry
+<category> := [<profile> <oblique-reference> ...]
+"
+   ]
+  [:cg/seekRight
+   :rdfs/domain :natlex/LexicalEntry
+   :rdfs/rangeVector :cg/Category
+   :rdfs/comment "Asserts that <entry> seeks right for the specified category"
+   ]
+  [:cg/seekLeft
+   :rdfs/domain :natlex/LexicalEntry
+   :rdfs/rangeVector :cg/Category
+   :rdfs/comment "Asserts that <entry> seeks left for the specified category"
+   ]
+  [:cg/seekGlobal
+   :rdfs/domain :natlex/LexicalEntry
+   :rdfs/rangeVector :cg/Category
+   :rdfs/comment "Asserts that <entry> seeks for the specified category without a specified direction."
+   ]
+  [:cg/semantics
+   :rdfs/domain :natlex/LexicalEntry
+   :rdfs/range :cg/SemanticSpec
+   :rdfs/comment "Asserts that the specified semantic spec can be applied to a key map and return a graph representing the resulting meaning of the expression."
+   ]
+  [:cg/SemanticSpec
+   :rdfs/comment "A quoted s-expression of the form (fn [{:keys[...]}]...) Returning a add-spec for and instance of IGraph. It should specify values for each element of :cg/category for the same entry."
+   ]
+  [:cd/hasExemplar
+   :rdfs/domain :natlex/LexicalEntry
+   :rdfs/range :natlex/Expression
+   :rdfs/comment "A relation that appears within the Metagraph applying between the Lexical entry and one of its examplars."
+   ]
+  [:natlex/Expression
+   :rdf/subClassOf :natlex/Chunk
+   :rdfs/comment "Refers to a representation"
+   ]
+  ])
+
 
 (def the unique)
 
@@ -31,12 +161,12 @@ Where:
   :Discourse class-name implies that there is an addressee who is a person.
 "
   (let [implicits (case class-name
-                     :Discourse {:addressee (make-prototype :Person)}
+                     :cg/Discourse {:cg/addressee (make-prototype :cg/Person)}
                      {})
         ]
         (merge implicits
-               {:id (keyword (gensym class-name))
-                :instanceOf class-name})))
+               {::id (keyword (gensym class-name))
+                :cg/instanceOf class-name})))
 
 (defn make-exemplar
   "returns <exemplar> for `category` `term` and `args`
@@ -63,42 +193,19 @@ Where:
            (assert (= (set (keys (make-exemplar
                                   :S
                                   "blah"
-                                  {:Ni (make-prototype :Person)})))
+                                  {:Ni (make-prototype :cg/Person)})))
                       #{:id :Ni})))
    }
   ([category term]
    (make-exemplar category term {}))
   
   ([category term args]
-   {:id (keyword (gensym term))
-    :category category
-    :args args
+   {::id (keyword (gensym term))
+    :cg/category category
+    :cg/args args
     }))
 
 
-
-(def old-test-context
-  {:lexicon {"hello" [{:definition {:category :S
-                                    :seek-right :N
-                                    :seek-global :D
-                                    :semantics '(fn [{:keys [N D]}]
-                                                  {:S {:instanceOf :Greeting
-                                                       :addressee N}
-                                                   N {:sameAs (:addressee D)}})}
-                       :exemplars [(make-exemplar
-                                    :S
-                                    "hello"
-                                    {
-                                     :D (merge {:category :D}
-                                               (make-prototype :Discourse))
-                                     :N (merge {:category :N}
-                                               (make-prototype :Person))
-                                     })
-                                   ]}]
-             "world" [{:definition {:category :N
-                                    :semantics '(fn []
-                                                  {:N {:sameAs :TheWorld}})}
-                       :exemplars [(make-exemplar :N "world")]}]}})
 
 
 (def metagraph (atom (make-graph :schema {:id ::MetaGraph})))
@@ -110,91 +217,164 @@ Where
 "
   (:id (.schema g)))
 
-(defn add-subgraph! [subgraph]
-  "Returns `metagraph`, with `subgraph` added.
+(defn make-chunk [id contents]
+  "Returns <chunk> s.t. (:id (:schema 
+"
+  (add (make-graph :schema {:id id})
+       contents))
+
+(defn add-chunk! [chunk]
+  "SIDE-EFFECT: `metagraph`, has  `chunk` added.
 Where
-<metagraph> := [[::Metagraph natlex:hasSubgraph  <graphName>]
-                [<graphName> natlex:asGraph <subgraph>]
+<metagraph> := [[::Metagraph natlex:hasChunk  <graphName>]
+                [<graphName> natlex:asGraph <chunk>]
                 ...], an global atom
-<subgraph> is an instance implmenting IGraph s.t. 
+<chunk> is an instance implmenting IGraph s.t. 
   [:self :id <graphName>]
-<graphName> is a keyword naming <subgraph>
+<graphName> is a keyword naming <chunk>
 "
   (reset! metagraph
           (add @metagraph
-               [[::MetaGraph :natlex:hasSubgraph (graph-id subgraph)]
-                [(graph-id subgraph) :natlex:asGraph subgraph]
+               [[::MetaGraph :natlex/hasChunk (graph-id chunk)]
+                [(graph-id chunk) :natlex/asGraph chunk]
                 ])))
 
-(defn add-lexicon! []
-  "Returns `metagraph` s.t. [[<metagraph> :hasSubgraph :Lexicon]
+#_(defn add-lexicon! []
+  "Returns `metagraph` s.t. [[<metagraph> :hasChunk :Lexicon]
                              [:Lexicon :natlex:asGraph <Lexicon>]
                              ...]
                              [[<lexicon> :self :id :Lexicon]
                               [<form> :hasEntry <entry>]
                               [<entry> <p> <o>]]
 "
-  (add-subgraph!
+  (add-chunk!
    (add (make-graph
          :schema {:id :Lexicon})
     
-    [[:enForm:hello :hasEntry :enLex:hello]
-     [:enLex:hello
-      :rdf:type :LexicalEntry
-      :cat "S/N"
-      :cg:category :S
-      :cg:seekRight :N
-      :cg:seekGlobal :D
-      :cg:semantics '(fn [{:keys [D N]}]
+    [[:enForm/hello :hasEntry :enLex/hello]
+     [:enLex/hello
+      :rdf/type :LexicalEntry
+      :cg/catLabel "S/N"
+      :cg/category :S
+      :cg/seekRight :N
+      :cg/seekGlobal :D
+      :cg/semantics '(fn [{:keys [D N]}]
                        [[:S
-                         :sem:eventType :Greeting
-                         :sem:addressee N]]
+                         :sem/eventType :Greeting
+                         :sem/addressee N]]
                              
 
-      ]
-     [:enForm:world :hasEntry :enLex:world]
-     [:enLex:world
-      :rdf:type :LexicalEntry
-      :cg:category :N
-      :cg:semantics '(fn[]
-                       [:N :owl:sameAs :wd:Q16502]
+                       )]
+     [:enForm/world :hasEntry :enLex/world]
+     [:enLex/world
+      :rdf/type :LexicalEntry
+      :cg/category :N
+      :cg/semantics '(fn[]
+                       [:N :owl/sameAs :wd/Q16502]
                         )]
       
-      ]
-     ])))
+      ])))
+
+(defn add-lexical-entry!
+  "
+  SIDE-EFFECT: Metagraph has an added chunk <entry-id>, whose contents are <entry-spex>
+  Where
+  <entry-id> is a keyword naming a lexical entry.
+  <entry-spex> := [<entry-id> <entry-p> <entry-v>, ...]
+  <entry-p> is a property whose domain is a lexical entry
+  <entry-v> is a value for <entry-p> appropriate to <entry-id>
+  "
+  [form entry-spex]
+  (let [[entry-id & po] entry-spex]
+    (def *po* po)
+    (add-chunk!
+     (make-chunk entry-id
+                 (reduce conj
+                         entry-spex
+                         [:rdf/type :natlex/LexicalEntry])))))
+    
+                                   
+    
+(defn add-lexicon! []
+  (add-lexical-entry!
+   :enForm/hello 
+   [:enLex/hello
+    :cg/catLabel "S/N"
+    :cg/category [:S]
+    :cg/seekRight [:N]
+    :cg/seekGlobal [:D]
+    :cg/semantics '(fn [{:keys [S N D]}]
+                     [[S
+                       :sem/eventType :Greeting
+                       :sem/addressee N]]
+                     )])
+
+  (add-lexical-entry!
+   :enForm/world 
+   [:enLex/world
+    :cg/cat "N"
+    :cg/category [:N]
+    :cg/semantics '(fn[{:keys [N]}]
+                     [[N :owl/sameAs :wd/Q16502]]
+                     )]))
 
 (add-lexicon!)
+
+(def interpret identity) ;; for now
+
+(defn canonical-id [&{:keys [type category entry]}]
+  (keyword type (str (gensym (reduce str (interpose "-"
+                                                    (conj (map name category)
+                                                          (name entry))))))))
+
+(defn supplement-args [entry args category-element]
+  "Returns `args`, with `category-element` bound to a minted ID
+Where
+<args> := {<arg> <binding> , ...}
+<category-element> is a keyword, typically an element of some category 
+  spec in a lexical entry
+<arg> is a keyword, typically an 'seek' element of some lexical entry, or
+  some category element already bound in a previous call to this function
+<binding> is a keyword identifying some entity parsed upstream, or some
+  binding to a category-element already produced in a previous call to this 
+  function.
+"
+  (if-not (contains? args category-element)
+    #dbg
+    (assoc args category-element (canonical-id :type (name category-element)
+                                               :category [category-element]
+                                               :entry entry))
+    ;;else it's already bound in the args...
+    args))
 
 (defn add-exemplar
   "
   Returns `metagraph`, s.t. an exemplar is added for <entry> using <args>
   Where
   <metagraph> is the metagraph, modified s.t.
-    [[<entry> :natlex:hasExemplar <exemplar>]]
-    [:Metagraph :natlex:hasSubgraph <exemplar>]
+    [[<entry> :natlex/hasExemplar <exemplar>]]
+    [:Metagraph :natlex/hasChunk <exemplar>]
     [<exemplar> <s> <p> <o>...]
   <entry> names an existing lexical entry
   <args> := {<key> <value>...}, matching the semantics of <entry>
   "
   [entry args]
-  #dbg
-  (let [lexicon (the (@metagraph :Lexicon :natlex:asGraph))
-        cat (the (lexicon entry :cg:category))
-        exemplar (add
-                  (:D args)
-                  (interpret
-                   (add 
-                    (make-graph
-                     :schema {:mappings
-                              {cat
-                               (-> cat
-                                   str
-                                   gensym)}})
-                    (apply (eval (the (lexicon entry :cg:semantics)))
-                           [args]))))
-                     
+  (let [entry-chunk (the (@metagraph entry :natlex/asGraph))
+        category (the (entry-chunk entry :cg/category))
+        cid (canonical-id :type "exemplar"
+                          :category category
+                          :entry entry)
+        exemplar (make-chunk
+                  cid
+                  (apply (eval (the (entry-chunk entry :cg/semantics)))
+                         [(reduce (partial supplement-args entry)
+                                  args
+                                  category)]))
         ]
-    (add lexicon [entry :natlex:hasExemplar (graph-id exemplar)])))
+    (add-chunk! exemplar)
+    (reset! metagraph
+            (add @metagraph 
+                 [[entry :natlex/hasExemplar (graph-id exemplar)]]))))
                      
 
 (defn all-lower-case? [token]
@@ -216,12 +396,11 @@ Where
   <entry> is a keyword identifying a lexical entry
   <form> is a keyword identifying a lexical form
   "
-  {:test (fn [] (not (nil? (lookup-entry :enForm:hello))))
+  {:test (fn [] (not (nil? (lookup-entry :enForm/hello))))
    }
   [form]
-  (let [lexicon (the (@metagraph :Lexicon :natlex:asGraph))
-        ]
-    (lexicon form :hasEntry)))
+  (@metagraph form :hasEntry))
+
 
     
 (defn matcher-for 
@@ -268,7 +447,7 @@ Where
     (-> 0
         match-categories))))
           
-;;(def hello (first (lookup-entry :enForm:hello)))
+;;(def hello (first (lookup-entry :enForm/hello)))
 
 ;; (def hello-exemplar (first (:exemplars (first (lookup-entry test-context "hello")))))
 ;; (def world (first (lookup-entry test-context "world")))
@@ -300,10 +479,6 @@ Where
 (def english-speaker (add (make-graph :schema {:id :english-speaker})
                           [[:english-speaker :isa :Speaker-Model]]))
 
-
-
-
-
 (defn substring-id [discourse start end]
   (keyword (name (graph-id discourse))
            (str (str/join "," [start end]))))
@@ -311,26 +486,29 @@ Where
 (defn new-substring-properties [type discourse contents]
   "Returns <substring-properties>
 Where
-keys(substring-properties) := #{:rdf:type :nif:referenceContext nif:anchorOf}
+keys(substring-properties) := #{:rdf/type :nif/referenceContext nif:anchorOf}
 "
   {
-   :rdf:type type
-   :nif:referenceContext (graph-id discourse)
-   :nif:anchorOf contents
+   :rdf/type type
+   :nif/referenceContext (graph-id discourse)
+   :nif/anchorOf contents
    })
 
 (def new-sentence-properties
-  "Returns new-substring for type :nif:Sentence"
-  (partial new-substring-properties :nif:Sentence))
+  "Returns new-substring for type :nif/Sentence"
+  (partial new-substring-properties :nif/Sentence))
 
 (def new-word-properties
-  "Returns new-substring for type :nif:Word"
-  (partial new-substring-properties :nif:Word))
+  "Returns new-substring for type :nif/Word"
+  (partial new-substring-properties :nif/Word))
 
 
-(defn normalize [m]
-  "Returns each value in <m> as a set to support graph normal form.
-Typically used when we have a simple key->single-value map and want to add it ot the graph
+(defn kv->po [m]
+  "Returns {<p> #{<o>} ,,,} for <m>
+Where
+<m> := {<p> <o> ...}
+Typically used when we have a simple key->single-value map and want to 
+add it to the graph
 "
   (reduce-kv (fn [acc k v]
                (assoc acc k (set [v]))) {} m))
@@ -343,14 +521,14 @@ Typically used when we have a simple key->single-value map and want to add it ot
 Where
 keys(<acc>) := #{:last-offset :sentences}
 keys(next-substring) := #{nif:beginIndex, 
-                                :nif:endIndex, 
-                                :rdf:type}
+                                :nif/endIndex, 
+                                :rdf/type}
 (<discourse> <parent-id> <substrings-property>)  -> #{[<substring-id>, ...]}
 <last-offset> is the last offset of the last sibling substring added.
 <substring-property> is one of #{::sentences ::tokens}
 <discourse>' := {:self {:id #{<id>}}
-                <id> :rdf:type :natlex:Discourse
-                <id> :nif:isString <string>
+                <id> :rdf/type :natlex/Discourse
+                <id> :nif/isString <string>
                 <id> <substring-property> [<substring-id>, ...]
                }
 "
@@ -358,10 +536,10 @@ keys(next-substring) := #{nif:beginIndex,
    (fn [acc']
      (let [[discourse lo] acc'
            s (last (:sentences discourse))]
-       (= (the (discourse s :nif:anchorOf))
-          (subs (the (discourse :nif:isString))
-                (the (discourse s :nif:beginIndex))
-                (the (discourse s :nif:endIndex))))))
+       (= (the (discourse s :nif/anchorOf))
+          (subs (the (discourse :nif/isString))
+                (the (discourse s :nif/beginIndex))
+                (the (discourse s :nif/endIndex))))))
    }
   (let [[discourse last-offset] acc
         substrings (or (the (discourse parent-id substrings-property))
@@ -373,12 +551,12 @@ keys(next-substring) := #{nif:beginIndex,
                        (subs (the
                               (discourse
                                (graph-id discourse)
-                               :nif:isString))
+                               :nif/isString))
                              last-offset))
               ]
           (count spaces))
         beg (+ last-offset leading-space-count)
-        end (+ beg (count (:nif:anchorOf next-substring)))
+        end (+ beg (count (:nif/anchorOf next-substring)))
         sid (substring-id discourse beg end)
         ]
     ;; return new acc...
@@ -387,25 +565,23 @@ keys(next-substring) := #{nif:beginIndex,
          (add (reduce
                conj
                [[parent-id substrings-property (conj substrings sid)]
-                [sid :nif:beginIndex beg
-                 :nif:endIndex end]
+                [sid :nif/beginIndex beg
+                 :nif/endIndex end]
                 ]
                (if previous-substring
                  [[previous-substring next-substring-property sid]]
                  [])))
-         (add {sid (normalize next-substring)}))
+         (add {sid (kv->po next-substring)}))
      ,
      end]))
 
 
 (def annotate-sentence-positions
-  (partial annotate-substring-positions ::sentences :nif:nextSentence))
+  (partial annotate-substring-positions ::sentences :nif/nextSentence))
 
 (def annotate-token-positions
-  (partial annotate-substring-positions ::tokens :nif:nextWord))
+  (partial annotate-substring-positions ::tokens :nif/nextWord))
   
-                                          
-
 
 (defn discourse-id [corpus index]
   (keyword corpus (str "D" index)))
@@ -415,10 +591,10 @@ keys(next-substring) := #{nif:beginIndex,
         discourse 
         (add (make-graph :schema {:id discourse-id})
              [[discourse-id
-              :rdf:type :nif:Context
-              :nif:isString contents
-              :nif:beginIndex 0
-              :nif:endIndex (count contents)
+              :rdf/type :nif/Context
+              :nif/isString contents
+              :nif/beginIndex 0
+              :nif/endIndex (count contents)
               ]])
         
         sentence-annotated
@@ -431,11 +607,11 @@ keys(next-substring) := #{nif:beginIndex,
           (first (reduce (partial annotate-token-positions sentence-id)
                          [sentence-annotated (the (sentence-annotated
                                                    sentence-id
-                                                   :nif:beginIndex))]
+                                                   :nif/beginIndex))]
                          (map (partial new-word-properties sentence-annotated)
                               (tokenize (the (sentence-annotated
                                               sentence-id
-                                              :nif:anchorOf)))))))
+                                              :nif/anchorOf)))))))
         ]
     sentence-annotated
     #_(log/info (normal-form sentence-annotated))
@@ -449,15 +625,14 @@ keys(next-substring) := #{nif:beginIndex,
   #_(println (parse "Hello World" {}))
   (let [discourse (new-discourse
                    "mycorpus" 1 "hello world. It's great to be alive.")
-        lexicon (the (@metagraph :Lexicon :asGraph))
         ]
     
     ;; (make-graph :schema {:id (keyword (str (name entry) "#blah"))})
     (let [some-person (keyword (gensym "Person"))
-          D (make-graph :schema {:id :enLex:hello#examplar1})
+          D (make-graph :schema {:id :enLex/hello#examplar1})
           ]
-      (add-exemplar :enLex:hello
-                    {:D (add D [some-person :rdf:type :wd:Q5])
+      (add-exemplar :enLex/hello
+                    {:D (add D [some-person :rdf/type :wd/Q5])
                      :N some-person
                      }))))
   
