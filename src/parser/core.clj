@@ -1,144 +1,17 @@
 (ns parser.core
-  {
-   :vann/preferredNamespacePrefix "cg"
-   :vann/preferredNamespaceUri "http://rdf.naturallexicon.org/cg/parser"
-   :rdfs/comment "Deals with using the Natlex categorial grammar to parse NL text"
-   }
   (:require [clojure.string :as str]
-            [igraph.core :refer :all]
-            [igraph.graph :refer :all]
+            [ont-app.igraph.core :refer :all]
+            [ont-app.igraph.graph :refer :all]
+            [ont-app.graph-log.core :as glog]
+            [parser.ont :as ont]
             [opennlp.nlp]
-            [taoensso.timbre :as log]
             )
   
   (:gen-class))
 
-;; Holds the terms of our ontology
-(def terms-ref (atom (make-graph)))
-
-(defn add-terms [terms]
-  (reset! terms-ref
-          (add @terms-ref terms)))
-
-;; GENERAL
-(add-terms
- [[:natlex/hasChunk
-   :rdfs/domain :natlex/CognitiveModel
-   :rdfs/range :natlex/Chunk
-   :rdfs/comment "Asserts that <chunk> is a URI associated with its own graph."
-   ]
-  [:natlex/asGraph
-   :rdfs/comment "Asserts that <chunk id> refers to the graph <chunk>"
-   :rdfs/domain :natlex/Chunk
-   :rdfs/range :natlex/ChunkGraph
-   ]
-  [:natlex/Chunk
-   :rdf/type :rdfs/Class
-   :rdfs/comment "Refers to a graph dedicated to representing a chunk whose elements are activated together. A Chunk will appear in the metagraph and as the :Id of its associated graph."
-   ]
-  ])
-
-;; DISCOURSE
-(add-terms
-   [[:cg/Discourse
-     :rdf/type :rdf/Class
-     :rdfs/comment "Refers to a unit of discourse"
-     ]
-    [:cg/addressee
-     :rdf/type :rdf/Property
-     :rdfs/domain :cg/Discourse
-     :rdfs/range :cg/Audience
-     :rdfs/comment "<discourse> cd/addressee <audience>
-Asserts that the content of <discourse> is being directed to <audience> 
-Where
-<discourse> is a unit of discourse
-<audience> is one or more listeners
-"
-     ]
-    [:cg/Audience
-     :rdf/type :rdf/Class
-     :rdfs/comment "Refers to one or more people presumed to share the same model of listening fluency in the language of some discourse."
-     ]
-    
-    ])
-
-;; OBJECTS IN THE WORLD
-(add-terms
- [[:cg/Person
-   :rdfs/sameAs :wd/Q5
-   ]
-  ])
-
-;; META
-(add-terms
- [[:cg/rangeVector
-   :rdfs/comment "<x> rangeVector <v> 
-Asserts that <v> is a vector, and would need special processing to render as RDF."
-   ]
-  [:cg/Vector
-   :rdfs/comment "Refers to a construct rendered as a vector"
-   ]
-  ])
-
-;; GRAMMAR STUFF
-(add-terms
- [[:natlex/LexicalEntry
-   :rdfs/subClassOf :natlex/Chunk
-   :rdfs/comment "Refers to a Lexical entry chunk for one or more related forms."
-   ]
-  [:cg/cat
-   :rdfs/domain :natlex/LexicalEntry
-   :rdfs/range :rdf/Literal
-   :rdfs/comment "Asserts the CG category for <entry> as a string."
-   ]
-  [:cg/category
-   :rdfs/subPropertyOf :cg/lexicalProperty
-   :rdfs/domain :cg/LexicalEntry
-   :cg/rangeVector :cg/Category
-   :rdfs/comment "<entry> category <category>
-Asserts that <entry> when construed in text makes reference to elements of 
-<category>, in order of salience.
-Where
-<entry> is a lexical entry
-<category> := [<profile> <oblique-reference> ...]
-"
-   ]
-  [:cg/seekRight
-   :rdfs/domain :natlex/LexicalEntry
-   :rdfs/rangeVector :cg/Category
-   :rdfs/comment "Asserts that <entry> seeks right for the specified category"
-   ]
-  [:cg/seekLeft
-   :rdfs/domain :natlex/LexicalEntry
-   :rdfs/rangeVector :cg/Category
-   :rdfs/comment "Asserts that <entry> seeks left for the specified category"
-   ]
-  [:cg/seekGlobal
-   :rdfs/domain :natlex/LexicalEntry
-   :rdfs/rangeVector :cg/Category
-   :rdfs/comment "Asserts that <entry> seeks for the specified category without a specified direction."
-   ]
-  [:cg/semantics
-   :rdfs/domain :natlex/LexicalEntry
-   :rdfs/range :cg/SemanticSpec
-   :rdfs/comment "Asserts that the specified semantic spec can be applied to a key map and return a graph representing the resulting meaning of the expression."
-   ]
-  [:cg/SemanticSpec
-   :rdfs/comment "A quoted s-expression of the form (fn [{:keys[...]}]...) Returning a add-spec for and instance of IGraph. It should specify values for each element of :cg/category for the same entry."
-   ]
-  [:cd/hasExemplar
-   :rdfs/domain :natlex/LexicalEntry
-   :rdfs/range :natlex/Expression
-   :rdfs/comment "A relation that appears within the Metagraph applying between the Lexical entry and one of its examplars."
-   ]
-  [:natlex/Expression
-   :rdf/subClassOf :natlex/Chunk
-   :rdfs/comment "Refers to a representation"
-   ]
-  ])
-
-
 (def the unique)
+
+(def ontology @ont/ontology-atom)
 
 ;; see my notes in 
 ;; file:analogical-language-model.txt::*Sun%20Sep%2030%20***
@@ -208,7 +81,15 @@ Where:
 
 
 
-(def metagraph (atom (make-graph :schema {:id ::MetaGraph})))
+(def metagraph-ref (atom (make-graph :schema {:id ::MetaGraph})))
+
+;;; [[::Metagraph natlex:hasChunk <entryID>...<ExemplarID>
+;;;  [<entryID>
+;;;    natlex:asGraph <entryChunk>
+;;;    natlex:hasExemplar <ExemplarId>
+;;;  [<ExemplarId>
+;;;   asGraph <ExemplarChunk>]
+;;; ]
 
 (defn graph-id [g]
   "Returns <id> for  <g>
@@ -224,23 +105,23 @@ Where
        contents))
 
 (defn add-chunk! [chunk]
-  "SIDE-EFFECT: `metagraph`, has  `chunk` added.
+  "SIDE-EFFECT: `metagraph-ref`, has  `chunk` added.
 Where
-<metagraph> := [[::Metagraph natlex:hasChunk  <graphName>]
+<metagraph-ref> := [[::Metagraph natlex:hasChunk  <graphName>]
                 [<graphName> natlex:asGraph <chunk>]
                 ...], an global atom
 <chunk> is an instance implmenting IGraph s.t. 
   [:self :id <graphName>]
 <graphName> is a keyword naming <chunk>
 "
-  (reset! metagraph
-          (add @metagraph
+  (reset! metagraph-ref
+          (add @metagraph-ref
                [[::MetaGraph :natlex/hasChunk (graph-id chunk)]
                 [(graph-id chunk) :natlex/asGraph chunk]
                 ])))
 
 #_(defn add-lexicon! []
-  "Returns `metagraph` s.t. [[<metagraph> :hasChunk :Lexicon]
+  "Returns `metagraph-ref` s.t. [[<metagraph> :hasChunk :Lexicon]
                              [:Lexicon :natlex:asGraph <Lexicon>]
                              ...]
                              [[<lexicon> :self :id :Lexicon]
@@ -277,7 +158,7 @@ Where
 
 (defn add-lexical-entry!
   "
-  SIDE-EFFECT: Metagraph has an added chunk <entry-id>, whose contents are <entry-spex>
+  SIDE-EFFECT: Metagraph-Ref has an added chunk <entry-id>, whose contents are <entry-spex>
   Where
   <entry-id> is a keyword naming a lexical entry.
   <entry-spex> := [<entry-id> <entry-p> <entry-v>, ...]
@@ -347,9 +228,29 @@ Where
     ;;else it's already bound in the args...
     args))
 
+(defn annotate-parse 
+  "Returns `parse`', annoated for <entry> and <args>
+  Where
+  <parse> := [[:<s> <p1> <o1> <p2> <o2>]...] generated by application
+  of semantics of <entry>
+  <parse'> has [<entry> <arg> <binding>...] added for each arg.
+  <entry> := the ID of a lexical entry.
+  <args> := {<arg> <binding>, ...}
+  NOTE: this is done so that the examplar can be matched to future candidates
+    for any <arg>
+  "
+  [entry args parse]
+  {:pre [(vector? parse)]
+   }
+  (letfn [(collect-arg
+            [acc k v]
+            (conj acc [entry k v]))
+          ]
+    (reduce-kv collect-arg parse args)))
+
 (defn add-exemplar
   "
-  Returns `metagraph`, s.t. an exemplar is added for <entry> using <args>
+  Returns `metagraph-ref`, s.t. an exemplar is added for <entry> using <args>
   Where
   <metagraph> is the metagraph, modified s.t.
     [[<entry> :natlex/hasExemplar <exemplar>]]
@@ -359,21 +260,24 @@ Where
   <args> := {<key> <value>...}, matching the semantics of <entry>
   "
   [entry args]
-  (let [entry-chunk (the (@metagraph entry :natlex/asGraph))
+  (let [entry-chunk (the (@metagraph-ref entry :natlex/asGraph))
         category (the (entry-chunk entry :cg/category))
         cid (canonical-id :type "exemplar"
                           :category category
                           :entry entry)
+        args (reduce (partial supplement-args entry)
+                     args
+                     category)
         exemplar (make-chunk
                   cid
-                  (apply (eval (the (entry-chunk entry :cg/semantics)))
-                         [(reduce (partial supplement-args entry)
-                                  args
-                                  category)]))
+                  (->>
+                   (apply (eval (the (entry-chunk entry :cg/semantics)))
+                          [args])
+                   (annotate-parse entry args)))
         ]
     (add-chunk! exemplar)
-    (reset! metagraph
-            (add @metagraph 
+    (reset! metagraph-ref
+            (add @metagraph-ref 
                  [[entry :natlex/hasExemplar (graph-id exemplar)]]))))
                      
 
@@ -399,53 +303,68 @@ Where
   {:test (fn [] (not (nil? (lookup-entry :enForm/hello))))
    }
   [form]
-  (@metagraph form :hasEntry))
+  (@metagraph-ref form :hasEntry))
 
 
-    
+(defn collect-category-pair [weight-fn exemplar target 
+                             acc [source-cat target-cat]]
+  "returns <acc'> 
+Where 
+<acc> [<aggregate weight>, {<exemplar> {<exemplar-role> {<analog> <weight>}}]
+<aggregate-weight> is the (?)product of each <weight>.
+<weight> is the value assiged to the category-pair binding
+<exemplar> is part of our reference corpus for say 'hello'
+<target> was parsed from the current sentence, for say 'world'
+<weight-fn> := (fn [exemplar-role target] -> number)
+<source-cat> is a category tag in (category-of source)
+<target-cat> is a category tag in (category-of target)
+(category-of <exemplar>) -> [:category-tag ...]
+
+Source-cat and target-cat should be mappable to primitive categories :N :S or :D
+Mis-matches on these primitives should be severely penalized.
+  "
+  )
+
 (defn matcher-for 
   "
-  Returns (fn [source target] -> {?source ?target ?degree-of-match} for `lexical-entry` and `arg`
+  Returns (fn [exemplar target] -> 
+  -> {<exemplar-role> {<target> <degree-of-match>}}
   Where
-  <lexical-entry> := {:definition <source-definition> :exemplars <exemplars>}
-  <source-defintion> := {?seek-left ?seek-right ?semantics...}
-  <arg> is one of #{<seek-left> <seek-right>}
+  <lexical-entry> := chunk-id s.t. (Metagraph-Ref hasChunk <lexical-entry>
+  <seek-arg> is one of #{:cg/seek-left :cg/seek-right}
   <seek-left> and <seek-right> name arguments to ?semantics
   <semantics> is a sequence readable as a (fn [args] ...) -> <parse-graph>
   <target> {:definition <target-definition> :exemplars <target-exemplars>
      :current <current>}, a sup-parse of the current parse
-  <source> := {?category ...} is an argument for <arg> in an exemplar from
-    <lexical-entry>
+  <exemplar> := {?category ...} is an argument for <seek-arg> in an exemplar
+    from <lexical-entry>
   <degree of match> is a number 0...1, reflecting how well <target> matches 
     <source>.
+  QUESTION: if we're matching between elements that still have open 'seeks',
+    should we combine constraints for when these seeks are resolved downstream?
 "
 
-  [lexical-entry arg]
-  {:pre [(map? lexical-entry)
-         (:definition lexical-entry)
-         (not (nil? arg))
+  [lexical-entry seek-arg]
+  {:pre [(@metagraph-ref ::Metagraph :natlex/hasChunk lexical-entry)
+         (#{:cg/seekRight :cg/seekLeft} seek-arg)
          ]
    
    }
-  (Exception. "This needs to be refactored for graph")
-  (fn [source target]
-    {:pre [(get-in source [:category])
-           (get-in target [:definition :category])
-           ]
-     }
-    (def _source source)
-    (def _target target)
-    (let [
-          match-categories
-          (fn [score]
-            (if (= (get-in source [:category])
-                   (get-in target [:definition :category]))
-              (+ score 0.5)
-              score))
-                           
+  (let [entry-chunk (the (@metagraph-ref lexical-entry :natlex/asGraph))
+        
         ]
-    (-> 0
-        match-categories))))
+    (fn [exemplar target]
+
+      (let [exemplar-chunk (the (@metagraph-ref exemplar :natlex/asGraph))
+            source-catagory (seek-arg lexical-entry)
+            target-category (category-of target)
+            ]
+        (assert (= (count (category-of exemplar))
+                   (count (catagory-of target))))
+        (reduce (partial collect-category-pairing weight-fn exemplar target)
+                (map vector source-catagory target-category))))))
+        
+                          
           
 ;;(def hello (first (lookup-entry :enForm/hello)))
 
@@ -613,10 +532,10 @@ keys(next-substring) := #{nif:beginIndex,
                                               sentence-id
                                               :nif/anchorOf)))))))
         ]
-    sentence-annotated
-    #_(log/info (normal-form sentence-annotated))
-    (reduce annotate-tokens sentence-annotated
-            (the (sentence-annotated discourse-id ::sentences)))))
+    (glog/value-info
+     ::sentence-annotated
+     (reduce annotate-tokens sentence-annotated
+             (the (sentence-annotated discourse-id ::sentences))))))
 
 
 (defn -main
