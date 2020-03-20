@@ -539,7 +539,7 @@ keys(next-substring) := #{nif:beginIndex,
 
 
 (defn -main
-  "I don't do a whole lot ... yet."
+  "Demos a parse"
   [& args]
   #_(println (parse "Hello World" {}))
   (let [discourse (new-discourse
