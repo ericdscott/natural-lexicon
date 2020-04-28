@@ -18,8 +18,6 @@
 
    ))
 
-
-
 (def ontology-atom (atom (make-graph)))
 
 (defn update-ontology [to-add]

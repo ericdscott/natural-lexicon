@@ -183,6 +183,7 @@ Where
     :cg/catLabel "S/N"
     :cg/category [:S]
     :cg/seekRight [:N]
+    :cd/syntagm [:S :enForm/hello :N]
     :cg/seekGlobal [:D]
     :cg/semantics '(fn [{:keys [S N D]}]
                      [[S
@@ -194,7 +195,7 @@ Where
    :enForm/world 
    [:enLex/world
     :cg/cat "N"
-    :cg/category [:N]
+    :cg/syntagm [:N :enForm/world]
     :cg/semantics '(fn[{:keys [N]}]
                      [[N :owl/sameAs :wd/Q16502]]
                      )]))
