@@ -49,7 +49,9 @@ The _KR_ will be changed as follows:
   
 <a name="h2-the-knowledge-resource"></a>
 ## The Knowledge Resource (KR)
-The Knowledge Resource or KR is a 'metagraph' which holds your linguistic knowledge, holding a number of specialized graphs with metadata about each graph. 
+The Knowledge Resource or KR is a 'metagraph' which holds your
+linguistic knowledge, holding a number of specialized graphs with
+metadata about each graph.
 
 
 ## Chunks
@@ -96,18 +98,20 @@ This parser is informed by Categorial Grammar to some degree, and each parse and
 #### Category `D` 
 - :D a unit of discourse
   - Each sentence takes place within a tree of D's, whose root D is
-    the top-level discourse
+    the top-level discourse (typically a document)
   - Properties whose domain is a discourse would include _partOfDiscourse_, _speaker_, _audience_,  _venue_, _time_,  _hasParticipant_, _hasEvent_, _hasState_, ...
   - Note that we can also model the speaker and listener, as well as
     the occasion, such as a political rally, etc.
   - Discourses can be queried for their contents in the course of parsing, 
-    - queries may traverse the tree of discourses and sub-discourses.
-    
+    - queries may traverse discourse tree.
+
+
 #### Category `N`
 - :N a nominal entity
   - Typical of noun phrases
   - Properties would reflect the entities being described
-  
+
+
 #### Category `S`
 - :S a sentential relationship
   - Typical of verb phrases and whole sentences
@@ -124,32 +128,44 @@ relations that describe how they combine. Some examples:
 
 
 | category | description | example  |
-|---|---|---|
+| --- | --- | --- |
 | `[N1:N1]` |  an adjective, _seeking_ an entity, and referencing that same entity, modified. | `([N1:N1] blue)`  |
-| `[N1:N2]` | a determiner, _seeking_ a reference to a class description, and referencing <br/> an instance of that class | `([N1:N2] the)`|
+| `[N1:N2]` | a determiner, _seeking_ a reference to a class description, and referencing <br/> an instance of that class | `([N1:N2] the)` |
 | `[S1:N1:N2]` | a transitive verb, _seeking_ a subject reference _N1_ and an object reference _N2_, <br/>returning a reference to a certain event type with N1 and N2 bound to certain roles. | `([S:N1:N2 eats)` |
-| `[N1|S1]` | A reified verb, making a _direct reference_, _N1_ to a reification of of a sentential <br> _indirect reference_, _S1_. | `([N1|S1] operation)`|
+| `[N1`&#124;`S1]` | A reified verb, making a _direct reference_, _N1_ to a reification of of a sentential <br> _indirect reference_, _S1_. | `([N1`&#124;`S1] operation)` |
 
-Complex categories have the following properties:
+Complex categories have the following aspects:
 
 - Each component of the category corresponds to a _reference_ to some
   N, S, or D.
 - A complex category my _seek_ a reference to some other construct
   with which it expects to combine.
 - Each category puts its primary reference _in profile_, but may also
-  provide secondary references which are not in profile, but may be
-  matched to other categories seeking those references.
+  provide secondary references which are not in profile. Secondary
+  references may be matched to other categories seeking those
+  references.
+- Complex categories form a taxonomy, subsumed by simpler categories
+  with the shared profiles, e.g. (N:N:N) <- (N:N) <- N
+
   
-Categories may also be expressed in the context of a _syntagm_, which
-expresses expectation of matching behavior within a sequence.
+### Syntagms
+A _syntagm_ is sequence of match elements which match patterns of
+text, mapping them to complex or simple categories. Each element of a
+syntagm is either a variable expressing a category specification or a
+lexical form to be matched directly. 
+
+A syntagm with its lexical forms translated to '_' are _abstract
+syntagms_. Each abstract syntagm is mappable to a corresponding
+complex category.
+
 
 | synagm | abstract syntagm | parent category |
-|---|---|---|
-|`(N1 blue N1)` |`(N1 _ N1)` | `[N1:N1]`|
-|`(N1 the N2)` |`(N1 _ N2)` | `[N1:N2]`|
-|`(S1 N1 eats N2)` |`(S1 N1 _ N2)` | `[S1:N1:N2]`|
-|`(N1|S1 action)` |`(N1|S1 _)` | `[N1|S1]`|
-|`(N1|S1 to S1:N2)` |`(N1|S1 _ S1:N1)` | `[N1|S1:(S1:N2)]`|
+| --- | --- | --- |
+| `(N1 blue N1)` | `(N1 _ N1)` | `[N1:N1]` |
+|  `(N1 the N2)` | `(N1 _ N2)` | `[N1:N2]` |
+| `(S1 N1 eats N2)` | `(S1 N1 _ N2)` | `[S1:N1:N2]` |
+| `(N1`&#124;`S1 action)` | `(N1`&#124;`S1 _)` | `[N1`&#124;`S1]` |
+| `(N1`&#124;`S1 to S1:N2)` | `(N1`&#124;`S1 _ S1`&#124;`N1)` | `[N1`&#124;`S1:(S1:N2)]` |
 
 Complex categories may also be expressed with glosses:
 
@@ -157,15 +173,17 @@ Complex categories may also be expressed with glosses:
 
 ### Lexical Entries
 
-One kind of chunk is a _LexicalEntry_, anchored at a prototype of the
-same name.
+A  _LexicalEntry_, is a kind of chunk, the most important elements of which are:
+- A syntagm
+- A paradigm, which seaves as a model for determining the feliciy of candidate variable bindings based on past combinations of variable bindings. 
+- Semantics, a function f [D var1, ...] -> exemplar-chunk.
 
 ```
 [[cg/LexicalEntry
   :rdf/type :proto/Prototype
   :proto/hasParameter :cg/syntagm
-  :proto/hasParameter :cg/category
-  :proto/hasParameter :cg/semantics
+  :proto/hasParameter :cg/paradigm
+  :proto/hasParameter :cg/semantics 
   ]]
 ```
 Each _syntagm_ is as described above in the discussion of categories.
@@ -175,170 +193,43 @@ When a match element is introduced in an elaboration of a lexical entry, that ma
 
 Eg:
 ```
-Watch this space.
-```
-Each _match-spec_ describes a category, expressed as a vector of keywords starting with N S or D. The first of which specifies the primary reference or profile of the expression, with subsequent keywords specifying secondary references. Keywords are treated as variables, and non-co-referential variables will need to have different names.
+[[:EnEntry/eat123
+  :elaborates :EnglishLexicalEntry
+  :syntagm (:?S :?N1 enForm/eat :?N2)
+  :semantics (fn [& keys [D N1 N2]]
+              (let [S (mint-kwi :EatEvent D ...)
+                   ]
+                   [S :rdf/type EatEvent
+                      :eater N1
+                      :eatee N2)))
+  :paradigm [{:?D (some Discourse)
+              :?N1 (some Organism)
+              :?N2 (some Food)
+              }]
+  ]]
 
-Kill what follows aftar adapting.
-
-A lexical entry is described thus:
-
-```
-(C0|C1:C3... {sem} (C4...) <lex1> (C5 ...) <lex2> (C6 ...) ...)
-
-```
-Where
-- Each CX refers to a D N or S encounted during parsing.
-- C0 identifies the direct referent of the expression
-  - The category of C0 determines the expression's _profile_ (Langacker)
-- '|' is an operator to specify indirect referents
-- C1 is an indirect referent of the expression
-  - These referents may also inform the matching process
-- ':' is an operator to specify schematic referents
-- C3 is a schematic referent, i.e. a component of the resulting
-  construction which has yet to be specified.
-  - The parsing process will seek to unify with adjoining expressions
-    whose profiles match the schematic referents.
-- SEM is a function returning a chunk-graph representing the contents of the parse.
-
-
-Examples
-
-Actually, I don't like this.
-
-How about:
-
-```
-  (add (make-chunk)
    [:LexicalEntry_hello-1
-    :cg/profile [:?S]
-    :cg/syntagm  [:enForm/hello :?N1]
-    :cg/semantics '(fn [{:keys [S N D]}]
+    :elaborates :EnglishLexicalEntry
+    :cg/syntagm  (?S :enForm/hello :?N1)
+    :cg/semantics '(fn [{:keys [N D]}]
+                     (let [S (mint-kwi D ...)]
                      [[S
                        :proto/elborates :Greeting
                        :sem/addressee N]]
                      )
-                     
-    :cg/seek :?N1 ;; implicit? 
-    ]
-    [:?S
-     :cg/category [:S]
-     :paradigm (fn [chunk] ...) -> 0..1
-    ]
-    [:?N1
-     :cg/category [:N]
-     :paradigm (fn [chunk] ...) -> 0.1
-    ]
+    :paradigm [{:?D (some :Discourse) 
+                :?N1 (some :Person)}]
     )
+    [:LexicalEntry_world
+     :elaborates :EnglishLexicalEntry
+     :syntagm '(?N :enForm/world)
+     :semantics (fn [& {:keys D}]
+                      (let [N (mint-kwi ....)]
+                      [N :owl/sameAs :wd/Q16502]]]))
+     :paradigm [{:?D (some :Discourse)}]]
 
 ```
 
-With derivable category:
-```
-"(S1 hello N1)"
-```
-
-[:Category_S1_syn_true_N1 
- :proto/elaborates :Category_S1_seek_N1
- :syntagm [true :?N1]
-]
- 
-[:Category_S1_seek_N1
- :proto/elaborates :Category_S1_seek_unspecified
- :seek :?N1
- [:?N1 :cg/category [:N]
-    :paradigm ....
- ]
- ]
- 
-[:Category_S1
- :proto/elaborates :Category
- :profile [:?S1]
- ]
- [:?S1 :cg/category [:S] :paradigm ...]
-]
-[:Category
- :proto/hasParameter :profile
- :proto/hasParameter :seek
- :proto/hasPrameter :syntagm
-]
-
-TODO: How do we handle the namepaces for :?X ?
-
-
-Each category has the following prototype
-```
-[:category 
- :rdf/type :proto/Prototype
- :proto/hasParameter :profile
- :proto/hasParameter :seeks
- :proto/hasParameter :syntagm
- :proto/hasParameter :paradigm
- ]
-```
-- profile := [_named-category_, ...], reflecting the sub-elements being referenced in the construction. 
-- named category is a unique identifier within the chunk-graph,
-  starting with category
-- category is one of S, N, D
-- seeks := named category
-- syntagm := [x ...]
-- x is one of #{named-category, _}
-  where - matches tokens in a corresponding lexical form.
-
-And
-```
-  (add-lexical-entry!
-   [:enLex/world
-    :cg/category [[:N1] -]
-    :cg/syntagm [:enForm/world]
-    :cg/semantics '(fn[{:keys [N1]}]
-                     [[N1 :owl/sameAs :wd/Q16502]]
-                     )
-    :paradigms {:?N1 (add (make-chunk [:N :rdf/type :Person]))}]) ???
-```
-
-A reference has the following elements:
-- a profile (one of N S D)
-- a numeric index s.t. co-referential elements of a syntagm share the same index
-- an optional gloss, e.g. 'world' or 'addressee'
-- optional subordinate matching references e.g. (N1:N2 ...) is N1, seeking some N2.
-
-
-A syntagm consists of a vector of references R followed by a series of matching references and forms.
-
-R consists of a direct reference followed by zero or more indirect references.
-
-
-
-(add-lexical-entry!
-  `([:N] :enForm/world)
-    :cg/semantics '(fn[{:keys [N]}]
-                     [[N :owl/sameAs :wd/Q16502]]
-                     )]))
-
-(G :hasEntry (mint-kwi :LexicalEntry '([:N] :enForm/world))
-(mint-kwi :LexicalEntry '([:N-world] :enForm/world))
-  :elaborates :Category_N1_-
-  :contents [:enForm/world])
-  :bindings {:N :N-world}
-  :cg/semantics '(fn[{:keys [N-world]}]
-                     [[N-world :owl/sameAs :wd/Q16502]]
-                     )]))
-
-(add-lexical-entry!
-  `([:S] :enForm/hello :N)
-  :cg/semantics '(fn [{:keys [D S N]}]
-                       [S :rdf/type :Greeting
-                          :greeter (the (D speaker))
-                          :addressee N])
-  {:?N #{(parse "some person")}})
-                          
-With derivable category
-```
-(N -)
-```
-Which elaborates
-(N:* -)
 
 #### Paradigms for matching variables
 

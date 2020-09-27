@@ -3,15 +3,16 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.10.0"]
+  :dependencies [[org.clojure/clojure "1.10.1"]
                  ;; 3rd party
                  [clojure-opennlp "0.5.0"]
                  ;; ont-app
-                 [ont-app/graph-log "0.1.0"]
+                 [ont-app/igraph-vocabulary "0.1.2-SNAPSHOT"]
+                 [ont-app/graph-log  "0.1.1"]
                  [ont-app/prototypes "0.1.0-SNAPSHOT"]
-                 [ont-app/igraph "0.1.4"]
-                 [ont-app/igraph-vocabulary "0.1.0-SNAPSHOT"]
+                 [ont-app/igraph "0.1.6-SNAPSHOT"]
                  ]
-  :main ^:skip-aot parser.core
+  :init-ns natural-lexicon.parser.core
+  ;; :main ^:skip-aot parser.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})
