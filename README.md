@@ -1,5 +1,8 @@
 # parser
 
+*** UNDER CONSTRUCTION ****
+
+
 This project aims to implement a construction-based NL parser in clojure.
 
 ## Contents
